@@ -1,0 +1,7 @@
+#!/bin/sh
+# shellcheck shell=busybox
+# shellcheck disable=SC1091
+. /usr/share/libubox/jshn.sh
+. /etc/sing-box/core.sh
+prepare || exit 1
+worker "$1" "${2:-}"

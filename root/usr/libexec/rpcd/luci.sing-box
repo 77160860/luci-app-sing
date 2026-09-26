@@ -1,0 +1,234 @@
+#!/bin/sh
+# shellcheck shell=busybox
+# shellcheck disable=SC1091
+. /usr/share/libubox/jshn.sh
+. /etc/sing-box/core.sh
+
+reply() {
+	json_init
+	json_add_boolean ok "$1"
+	json_add_string code "$2"
+	json_add_string details "${3:-}"
+	json_dump
+}
+
+case "$1" in
+	list)
+		printf '%s\n' '{"status":{},"read":{},"logs":{},"cache":{},"check":{"content":"String"},"save":{"content":"String","revision":"String"},"action":{"name":"String","revision":"String"},"autostart":{"enabled":true},"upload":{"content":"String"},"download":{"url":"String"},"update_core":{"url":"String"}}'
+		exit 0;;
+	call) ;;
+	*) exit 1;;
+esac
+
+prepare || { reply 0 'directories_failed' "$DETAILS"; exit 0; }
+case "$2" in
+	upload)
+		kind='' content=''
+		payload=$(head -c 524288)
+		json_load "$payload" 2>/dev/null || { reply 0 request_invalid; exit 0; }
+		json_get_type kind content
+		[ "$kind" = string ] || { reply 0 content_invalid; exit 0; }
+		json_get_var content content
+		lock || { reply 0 operation_busy; exit 0; }
+		trap 'unlock' EXIT
+		settings || { reply 0 "$ERROR"; exit 0; }
+		save_config "$content" "" || { reply 0 "$ERROR"; exit 0; }
+		json_init
+		json_add_boolean ok 1
+		json_add_string code config_saved
+		json_dump
+		;;
+	download)
+		url=''
+		payload=$(head -c 1024)
+		json_load "$payload" 2>/dev/null || { reply 0 request_invalid; exit 0; }
+		json_get_var url url
+		[ -n "$url" ] || { reply 0 'url_invalid'; exit 0; }
+		content=$(wget -q -O - "$url") || { reply 0 'download_failed'; exit 0; }
+		lock || { reply 0 operation_busy; exit 0; }
+		trap 'unlock' EXIT
+		settings || { reply 0 "$ERROR"; exit 0; }
+		save_config "$content" "" || { reply 0 "$ERROR"; exit 0; }
+		json_init
+		json_add_boolean ok 1
+		json_add_string code config_saved
+		json_add_string content "$content"
+		json_dump
+		;;
+	update_core)
+		url=''
+		payload=$(head -c 2048)
+		json_load "$payload" 2>/dev/null || { reply 0 request_invalid; exit 0; }
+		json_get_var url url
+		[ -n "$url" ] || { reply 0 'url_invalid'; exit 0; }
+		lock || { reply 0 operation_busy; exit 0; }
+		trap 'unlock' EXIT
+		tmp="/tmp/sing-box.new"
+		rm -f "$tmp"
+		# 优先使用 curl 支持 302 重定向及 SSL；若无则使用 wget
+		if command -v curl >/dev/null 2>&1; then
+			curl -sSL -k -m 60 -o "$tmp" "$url"
+		else
+			wget -q --no-check-certificate -T 60 -O "$tmp" "$url"
+		fi
+		# 校验下载到的二进制是否可用
+		if [ -s "$tmp" ] && chmod +x "$tmp" && "$tmp" version >/dev/null 2>&1; then
+			new_ver=$("$tmp" version 2>/dev/null | head -n 1 | sed 's/version //')
+			service_do stop >/dev/null 2>&1
+			mv -f "$tmp" "$BIN" || { service_do start >/dev/null 2>&1; reply 0 'config_save_failed'; exit 0; }
+			chmod +x "$BIN"
+			service_do restart >/dev/null 2>&1
+			reply 1 'core_updated' "核心已更新为：$new_ver"
+		else
+			# 下载失败时先不 rm，保留文件在 /tmp/sing-box.new 方便排查
+			reply 0 'download_failed' "核心下载失败，请检查网络重试"
+		fi
+		exit 0;;
+	cache)
+		CACHE=''
+		cache_ok=1
+		ERROR=''
+		cache_settings || cache_ok=0
+		pid=$(running_pid)
+		json_init
+		json_add_boolean ok "$cache_ok"
+		json_add_string code "$ERROR"
+		json_add_string path "$CACHE"
+		json_add_string workdir "$WORKDIR"
+		json_add_string token "${CACHE_TOKEN:-}"
+		json_add_boolean running "$([ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && echo 1 || echo 0)"
+		json_dump;;
+	status)
+		config_error=''
+		settings || config_error="$ERROR"
+		pid=$(running_pid)
+		boot=0
+		"$INIT" enabled >/dev/null 2>&1 && [ "$(uci -q get sing-box.main.enabled)" = 1 ] && boot=1
+		busy=0
+		[ -d "$RUN/lock" ] && busy=1
+		job_data=$(cat "$RUN/job.json" 2>/dev/null)
+		json_init
+		json_add_boolean ok 1
+		json_add_string error_code "$config_error"
+		json_add_string version "$(run_timeout 2 "$BIN" version 2>/dev/null | head -n 1 | sed 's/version //')"
+		json_add_string config "$CONFIG"
+		json_add_string revision "$([ -z "$config_error" ] && config_revision)"
+		json_add_string pid "$pid"
+		json_add_boolean running "$([ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && echo 1 || echo 0)"
+		json_add_boolean autostart "$boot"
+		json_add_boolean busy "$busy"
+		json_add_string job "$job_data"
+		json_dump;;
+	read)
+		settings || { reply 0 "$ERROR"; exit 0; }
+		if [ -f "$CONFIG" ] && [ "$(wc -c < "$CONFIG")" -gt "$MAX_SIZE" ]; then
+			reply 0 config_too_large; exit 0
+		fi
+		revision=$(config_revision)
+		content=$(cat "$CONFIG" 2>/dev/null; printf '.')
+		content=${content%.}
+		[ "$revision" = "$(config_revision)" ] || { reply 0 config_changed; exit 0; }
+		json_init
+		json_add_boolean ok 1
+		json_add_string content "$content"
+		json_add_string revision "$revision"
+		json_dump;;
+	logs)
+		load_settings
+		mode=system
+		case "$(uci -q get sing-box.main.log_stderr)" in
+			0|off|false|no) log_stderr=0;;
+			*) log_stderr=1;;
+		esac
+		output=''
+		disabled=''
+		if [ -f "$CONFIG" ] && [ ! -L "$CONFIG" ]; then
+			output=$(jsonfilter -i "$CONFIG" -e '@.log.output' 2>/dev/null)
+			disabled=$(jsonfilter -i "$CONFIG" -e '@.log.disabled' 2>/dev/null)
+		fi
+		[ -z "$output" ] || mode='file'
+		[ "$disabled" != true ] || mode=disabled
+		raw=$(run_timeout 3 logread -e 'sing-box' 2>/dev/null) || {
+			reply 0 'logs_failed'; exit 0;
+		}
+		lines=$(printf '%s\n' "$raw" | grep -E 'sing-box(\[[0-9]+\])?:' | tail -n 300 | tail -c 32768 | sed 's/.*sing-box[^:]*: //; s/^[+-][0-9]\{4\} //; 1!G; h; $!d')
+		json_init
+		json_add_boolean ok 1
+		json_add_string mode "$mode"
+		json_add_boolean log_stderr "$log_stderr"
+		json_add_string output "$output"
+		json_add_string content "$lines"
+		json_dump;;
+	save|check)
+		kind='' content='' revision=''
+		payload=$(head -c 524288)
+		json_load "$payload" 2>/dev/null || { reply 0 request_invalid; exit 0; }
+		json_get_type kind content
+		[ "$kind" = string ] || { reply 0 content_invalid; exit 0; }
+		json_get_var content content
+		json_get_var revision revision
+		[ "$(printf '%s' "$content" | wc -c)" -le "$MAX_SIZE" ] || { reply 0 config_too_large; exit 0; }
+		lock || { reply 0 operation_busy; exit 0; }
+		trap 'unlock' EXIT
+		settings || { reply 0 "$ERROR"; exit 0; }
+		if [ "$2" = check ]; then
+			trap 'rm -f "$RUN/validation.json"; unlock' EXIT
+			printf '%s' "$content" > "$RUN/validation.json" || { reply 0 check_prepare_failed; exit 0; }
+			job queued operation_queued
+			/usr/libexec/sing-box-panel-worker validate </dev/null >/dev/null 2>&1 &
+			trap - EXIT
+			reply 1 operation_queued
+			exit 0
+		fi
+		save_config "$content" "$revision" || { reply 0 "$ERROR"; exit 0; }
+		json_init
+		json_add_boolean ok 1
+		json_add_string code config_saved
+		json_add_string revision "$(config_revision)"
+		json_dump;;
+	action)
+		name='' revision=''
+		payload=$(head -c 1024)
+		json_load "$payload" 2>/dev/null || { reply 0 'request_invalid'; exit 0; }
+		json_get_var name name
+		json_get_var revision revision
+		case "$name" in apply|start|stop|restart|cache_reset|cache_reset_start) ;; *) reply 0 'action_unknown'; exit 0;; esac
+		lock || { reply 0 'operation_busy'; exit 0; }
+		action_settings "$name" || { unlock; reply 0 "$ERROR"; exit 0; }
+		case "$name" in apply)
+			actual=$(config_revision)
+			if [ -z "$revision" ] || [ "$revision" != "$actual" ]; then
+				unlock; reply 0 config_changed; exit 0
+			fi;;
+		cache_reset|cache_reset_start)
+			cache_settings || { unlock; reply 0 "$ERROR"; exit 0; }
+			if [ -z "$revision" ] || [ "$revision" != "$CACHE_TOKEN" ]; then
+				unlock; reply 0 cache_changed; exit 0
+			fi;;
+		esac
+		job queued operation_queued
+		/usr/libexec/sing-box-panel-worker "$name" "$revision" </dev/null >/dev/null 2>&1 &
+		reply 1 'operation_queued';;
+	autostart)
+		kind='' enabled=''
+		payload=$(head -c 1024)
+		json_load "$payload" 2>/dev/null || { reply 0 'request_invalid'; exit 0; }
+		json_get_type kind enabled
+		json_get_var enabled enabled
+		[ "$kind" = boolean ] || { reply 0 'enabled_invalid'; exit 0; }
+		lock || { reply 0 'operation_busy'; exit 0; }
+		trap 'unlock' EXIT
+		init_action=disable
+		if [ "$enabled" = 1 ]; then
+			if ! { uci set sing-box.main.enabled=1 && uci commit sing-box; }; then
+				reply 0 'autostart_failed'; exit 0
+			fi
+			init_action=enable
+		fi
+		if "$INIT" "$init_action" > "$RUN/service.log" 2>&1; then
+			reply 1 'autostart_updated'
+		else
+			reply 0 'autostart_failed'
+		fi;;
+	*) reply 0 'method_unknown';;
+esac

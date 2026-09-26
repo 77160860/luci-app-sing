@@ -1,0 +1,6 @@
+/node_modules/
+/test-results/
+*.ipk
+*.apk
+/dist/
+/build.log
