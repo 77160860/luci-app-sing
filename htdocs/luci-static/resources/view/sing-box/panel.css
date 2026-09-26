@@ -1,0 +1,62 @@
+/* Only content sizing and wrapping; LuCI themes own colors, tabs and controls. */
+#sing-box-cache-start {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+}
+#sing-box-panel .cbi-value:has(#sing-box-autostart) {
+  display: flex;
+  align-items: center;
+}
+#sing-box-panel textarea {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  font-family: monospace;
+  resize: vertical;
+}
+#sing-box-panel .sing-box-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5em;
+}
+#sing-box-panel .cbi-page-actions {
+  justify-content: flex-end;
+}
+#sing-box-panel .cbi-value-field {
+  overflow-wrap: anywhere;
+}
+.sing-box-output {
+  max-height: 20em;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+#sing-box-panel .sing-box-check-notice {
+  margin: 0.5em 0;
+  padding: 0.6em 0.8em;
+  border-radius: 4px;
+}
+#sing-box-panel .sing-box-check-notice[hidden] {
+  display: none;
+}
+#sing-box-panel .sing-box-dirty {
+  font-weight: 700 !important;
+  font-size: 1em !important;
+}
+#sing-box-panel #custom-download-url,
+#sing-box-panel #custom-core-url {
+  box-sizing: border-box;
+  width: 520px;
+  max-width: 100%;
+  margin-right: 0.5em;
+}
+/* 黄色警示按钮（重启） */
+#sing-box-panel .cbi-button-warning {
+  color: #d97706 !important;
+  border-color: rgba(217, 119, 6, 0.35) !important;
+}
+#sing-box-panel .cbi-button-warning:hover {
+  background-color: rgba(245, 158, 11, 0.15) !important;
+  color: #f59e0b !important;
+}

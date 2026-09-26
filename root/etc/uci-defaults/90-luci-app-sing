@@ -1,0 +1,27 @@
+#!/bin/sh
+# Point the sing-box working directory at /etc/sing-box so the runtime cache
+# database (cache.db) and external UI directory (ui/) live alongside the config
+# instead of the upstream default /usr/share/sing-box. A path the user already
+# customised to something else is left untouched.
+[ -f /etc/config/sing-box ] || exit 0
+
+uci -q get sing-box.main >/dev/null 2>&1 || uci set sing-box.main=sing-box
+
+migrated=0
+case "$(uci -q get sing-box.main.workdir)" in
+	''|/usr/share/sing-box)
+		uci set sing-box.main.workdir='/etc/sing-box'
+		uci commit sing-box
+		migrated=1
+		;;
+esac
+
+mkdir -p /etc/sing-box
+
+# When run from the install hook the service may already be running under the
+# old -D; restart it so the new working directory takes effect immediately.
+# At early boot sing-box has not started yet, so pgrep is empty and we skip it.
+if [ "$migrated" = 1 ] && pgrep -f '/usr/bin/sing-box' >/dev/null 2>&1; then
+	/etc/init.d/sing-box restart >/dev/null 2>&1
+fi
+exit 0

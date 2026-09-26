@@ -1,0 +1,117 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '发布版本号（留空默认为 v1.2）'
+        required: false
+        default: ''
+        type: string
+      prerelease:
+        description: '标记为预发布版本'
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-sing
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 拉取源码
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: 解析版本号与固定 Tag
+        run: |
+          # 1. 沿用你原来的版本号解析逻辑（用于 APK/IPK 和标题）
+          USER_INPUT="${{ inputs.tag }}"
+          if [ -z "$USER_INPUT" ]; then
+            PKG_VER="v1.2"
+          else
+            if [[ "$USER_INPUT" =~ ^v ]]; then
+              PKG_VER="$USER_INPUT"
+            else
+              PKG_VER="v$USER_INPUT"
+            fi
+          fi
+
+          # 2. Tag 严格固定为 sing
+          FIXED_TAG="sing"
+
+          if [ -f ".github/scripts/build.sh" ]; then
+            sed -i '/RELEASE_TAG.*=~/,/exit 1;}/d' .github/scripts/build.sh
+          fi
+
+          echo "RELEASE_TAG=$FIXED_TAG" >> "$GITHUB_ENV"
+          echo "PKG_VERSION=$PKG_VER" >> "$GITHUB_ENV"
+          echo "固定 Tag: $FIXED_TAG | 软件包版本: $PKG_VER"
+
+      - name: 缓存编译工具
+        id: tools
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/packaging-tools
+          key: apk-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/scripts/prepare-tools.sh') }}
+
+      - name: 安装基础构建依赖
+        env:
+          TOOLS_CACHED: ${{ steps.tools.outputs.cache-hit }}
+        run: |
+          packages=(fakeroot tar gzip)
+          if [[ "$TOOLS_CACHED" != true ]]; then
+            packages+=(build-essential meson ninja-build pkg-config libssl-dev zlib1g-dev)
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+
+      - name: 编译构建 APK
+        env:
+          TOOLS_DIR: ${{ runner.temp }}/packaging-tools
+          RELEASE_TAG: ${{ env.PKG_VERSION }}
+        run: |
+          bash .github/scripts/prepare-tools.sh
+          bash .github/scripts/build.sh
+
+      - name: 发布全量包至 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          BUILD_SHA=$(git rev-parse HEAD)
+
+          # 1. 检查并删除已存在的同名 Release 及对应的 Tag (sing)
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "检测到已存在 Release [$RELEASE_TAG]，正在清理..."
+            gh release delete "$RELEASE_TAG" --yes --cleanup-tag
+          fi
+
+          # 2. 兜底清理孤立的远端 Tag
+          gh api -X DELETE "repos/${GH_REPO}/git/refs/tags/${RELEASE_TAG}" >/dev/null 2>&1 || true
+
+          EXTRA_FLAGS=()
+          if [ "$PRERELEASE" = "true" ]; then
+            EXTRA_FLAGS+=(--prerelease)
+          fi
+
+          # 3. 发布固定 Tag 为 sing
+          gh release create "$RELEASE_TAG" dist/*.apk dist/*.ipk \
+            --target "$BUILD_SHA" \
+            --title "luci-app-sing" \
+            --generate-notes \
+            "${EXTRA_FLAGS[@]}"
