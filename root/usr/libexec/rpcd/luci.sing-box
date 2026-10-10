@@ -114,6 +114,7 @@ case "$2" in
 		json_add_string config "$CONFIG"
 		json_add_string revision "$([ -z "$config_error" ] && config_revision)"
 		json_add_string pid "$pid"
+		json_add_string uptime "$([ -n "$pid" ] && process_uptime "$pid")"
 		json_add_boolean running "$([ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && echo 1 || echo 0)"
 		json_add_boolean autostart "$boot"
 		json_add_boolean busy "$busy"

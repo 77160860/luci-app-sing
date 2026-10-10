@@ -67,6 +67,25 @@ running_pid() {
 		jsonfilter -e '@["sing-box"].instances.*.pid' 2>/dev/null | head -n 1
 }
 
+# Elapsed seconds since the given PID started, derived from /proc.
+process_uptime() {
+	local pid="$1" sys_up rest stat clk start_ticks
+	[ -n "$pid" ] && [ -r "/proc/$pid/stat" ] || return
+	read -r sys_up rest < /proc/uptime 2>/dev/null || return
+	sys_up=${sys_up%.*}
+	stat=$(cat "/proc/$pid/stat" 2>/dev/null) || return
+	# Drop "pid (comm) " so the fields line up even when comm contains spaces;
+	# starttime is then the 20th remaining field (original field 22).
+	stat=${stat#*') '}
+	# shellcheck disable=SC2086
+	set -- $stat
+	start_ticks=${20}
+	clk=$(getconf CLK_TCK 2>/dev/null)
+	[ "$clk" -gt 0 ] 2>/dev/null || clk=100
+	[ -n "$sys_up" ] && [ -n "$start_ticks" ] || return
+	echo $(( sys_up - start_ticks / clk ))
+}
+
 healthy() {
 	# Require a stable live PID across three observations; a respawn is a failure.
 	local first current _attempt

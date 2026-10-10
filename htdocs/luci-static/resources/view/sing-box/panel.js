@@ -109,6 +109,21 @@ function checked(result) {
   return result;
 }
 
+function formatUptime(seconds) {
+  const total = Math.floor(Number(seconds));
+  if (!isFinite(total) || total < 0) return '未运行';
+  const d = Math.floor(total / 86400);
+  const h = Math.floor((total % 86400) / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const parts = [];
+  if (d) parts.push(d + 'd');
+  if (d || h) parts.push(h + 'h');
+  if (d || h || m) parts.push(m + 'm');
+  parts.push(s + 's');
+  return parts.join(' ');
+}
+
 function field(title, node) {
   return E('div', { class: 'cbi-value' }, [
     E('div', { class: 'cbi-value-title' }, title),
@@ -295,7 +310,7 @@ return view.extend({
     this.status = status;
     this.runtime.textContent = status.running ? '运行中 · PID ' + status.pid : '已停止';
     this.version.textContent = status.version || '未检测到内核';
-    this.path.textContent = status.config || '未配置';
+    this.uptime.textContent = status.running ? formatUptime(status.uptime) : '未运行';
     if (!this.localBusy) {
       this.boot.checked = !!status.autostart;
       if (this.bootText) this.bootText.textContent = this.boot.checked ? '已开启' : '未开启';
@@ -358,7 +373,7 @@ return view.extend({
     this.localBusy = false;
     this.runtime = E('strong');
     this.version = E('span');
-    this.path = E('code');
+    this.uptime = E('strong');
     this.problem = E('p', { class: 'cbi-section-descr', role: 'alert', hidden: true });
     this.dirty = E('div', { class: 'cbi-section-descr sing-box-dirty', 'aria-live': 'polite' });
     this.checkNotice = E('div', { class: 'sing-box-check-notice', role: 'status', 'aria-live': 'polite', hidden: true });
@@ -386,7 +401,7 @@ return view.extend({
     const overview = E('div', { 'data-tab': 'overview', 'data-tab-title': '概览' }, [
       field('运行状态', this.runtime),
       field('内核版本', this.version),
-      field('配置文件', this.path),
+      field('运行时间', this.uptime),
       field('开机启动', checkbox),
       field(
         '服务操作',
